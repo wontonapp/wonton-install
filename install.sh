@@ -3,21 +3,30 @@
 #
 # 再执行一次就是升级或修复：拉核心镜像的最新版本，密钥和数据都沿用，compose 文件按新的核心镜像重写。可调的环境变量：
 #
-#   WONTON_CORE_IMAGE   要装的核心镜像（默认 ghcr.io/geraldpeng6/wonton-core:beta，也可以写别的 tag 或 digest）
+#   WONTON_CORE_IMAGE   要装的核心镜像（默认 ghcr.io/geraldpeng6/wonton-core:beta），可以写别的 tag 或 digest。
+#                       tag 会按拉下来的镜像解析成仓库 digest 记进 .env，渠道照旧由这个 tag 决定
 #   WONTON_INSTALL_DIR  compose 文件、.env 和密钥（默认 /opt/wonton）
 #   WONTON_DATA_DIR     核心和插件的数据（默认 /var/lib/wonton）
 #   WONTON_PORT         局域网网页和网关的 TCP 端口（默认 8480）
 #   WONTON_TUNNEL_PORT  隧道的 UDP 端口（默认 8482）
-#   WONTON_BASE_DOMAIN  基础域名，同时是 Matrix 的服务器名，装好后不能改（默认 wonton.localhost）
+#   WONTON_BASE_DOMAIN  基础域名：App 经隧道访问核心和插件网页用的主机名，装好后不能改（默认 wonton.localhost）
+#   WONTON_MATRIX_SERVER_NAME  Matrix 的服务器名，只在第一次安装时有用，装好后不能改。默认随机生成一个每台不同的
+#                       名字；以后要和公网的 Matrix 联邦才写成自己的域名
 #   WONTON_OWNER_NAME   用户名，同时是 Matrix 用户名和插件里的账号，只能用小写字母、数字、_ 和 -，以字母开头，
 #                       最长 32 个字符，装好后不能改（默认 owner）
 #   TZ                  时区，IANA 时区名，如 Asia/Shanghai（默认宿主的时区，读不到时是 UTC）
-#   WONTON_LAN_ADDRESSES  插件的局域网端口只开在这些私有地址上，逗号分隔（默认不设：核心自动选，主人在 App 里改；
-#                       ADR-0019）。设成空就取消
+#   WONTON_LAN_ADDRESSES  插件的局域网端口只开在这些私有地址上，逗号分隔（默认不设：核心自动选，主人在 App 里改）。设成空就取消
+#   WONTON_RELAYS      中继表：档位用 ; 分开、前面的档优先，同档用 , 分开；令牌写在地址的
+#                       userinfo（https://TOKEN@host），n0 代表 iroh 内置的 n0 公共中继。默认不设：用 n0。
+#                       设成空就取消，回到 n0
 #   WONTON_EGRESS_PROXY  出网插件和核心经这个代理访问外网，http://、https:// 或 socks5://，可以带用户名和密码，特殊字符写成
-#                       百分号编码。测不通时安装失败。默认不设：第一次安装时检测一次，主人在 App 里改（ADR-0023）。设成空就取消
+#                       百分号编码。测不通时安装失败。默认不设：第一次安装时检测一次，主人在 App 里改。设成空就取消
+#   WONTON_PLUGIN_NETWORK_POOL  插件网络使用的私有 IPv4 地址段（默认 10.213.0.0/16），核心从中分配 /26
+#   WONTON_FEDERATION_SUBNET  联邦网络的子网（默认 10.212.0.0/24）。同机装多套时各给一段；装好后换了值
+#                       compose 会要求重建网络
+#   WONTON_FEDERATION_CORE_ADDR  核心在联邦网络上的固定地址（默认 10.212.0.10），必须在子网里；装好后不能改
 #   WONTON_PULL=never   不拉核心镜像，用本机已有的（测试用）
-#   WONTON_CORE_PIN     手动退回到这个 digest（sha256:…），之后照样跟渠道（ADR-0025）。有当时升级留下的备份就恢复核心
+#   WONTON_CORE_PIN     手动退回到这个 digest（sha256:…），之后照样跟渠道。有当时升级留下的备份就恢复核心
 #                       数据和安装目录
 #   WONTON_RESTORE_VOLUMES=1  退回不可逆的版本时，同时恢复备份里的卷
 #
@@ -119,10 +128,19 @@ tunnel_port=${WONTON_TUNNEL_PORT:-$(saved WONTON_TUNNEL_PORT)}
 tunnel_port=${tunnel_port:-8482}
 domain=${WONTON_BASE_DOMAIN:-$(saved WONTON_BASE_DOMAIN)}
 domain=${domain:-wonton.localhost}
+plugin_network_pool=${WONTON_PLUGIN_NETWORK_POOL:-$(saved WONTON_PLUGIN_NETWORK_POOL)}
+plugin_network_pool=${plugin_network_pool:-10.213.0.0/16}
+# 联邦网络：同机装多套时各给一段，地址必须落在子网里，compose 会当场拒绝不一致的组合。
+federation_subnet=${WONTON_FEDERATION_SUBNET:-$(saved WONTON_FEDERATION_SUBNET)}
+federation_subnet=${federation_subnet:-10.212.0.0/24}
+federation_core_addr=${WONTON_FEDERATION_CORE_ADDR:-$(saved WONTON_FEDERATION_CORE_ADDR)}
+federation_core_addr=${federation_core_addr:-10.212.0.10}
 # 没给也没记下时留空：核心用数据目录里记下的，第一次启动时是 owner。
 owner_name=${WONTON_OWNER_NAME:-$(saved WONTON_OWNER_NAME)}
 # 不用 `:-`：环境变量设成空就是取消上次的设置。
 lan_addresses=${WONTON_LAN_ADDRESSES-$(saved WONTON_LAN_ADDRESSES)}
+# 不用 `:-`：环境变量设成空就是取消上次的设置，回到 n0。
+relays=${WONTON_RELAYS-$(saved WONTON_RELAYS)}
 egress_proxy=${WONTON_EGRESS_PROXY-$(saved WONTON_EGRESS_PROXY)}
 egress_detected=$(saved WONTON_EGRESS_PROXY_DETECTED)
 tz=${TZ:-$(saved TZ)}
@@ -174,14 +192,28 @@ else
   }
   rm -f "$pull_err"
 fi
-# 能写成 digest 就写 digest：升级、回滚都按它（ADR-0012）。本机构建的镜像没有 digest，照原样写。
-pinned=$pull_image
-if [ -z "$pin" ]; then
-  pinned=$(docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$pull_image")
-  pinned=${pinned:-$pull_image}
+# 能写成 digest 就写 digest：升级、回滚都按它。给了 digest 的照写；给了标签的从拉下来的镜像的
+# RepoDigests 里取同一个仓库的那条，读不到就停下，不退回写标签：标签跟着渠道移走，回滚起到的就不是这一版。
+if [ -n "$pin" ]; then
+  pinned=$pull_image
+else
+  repository=${image%@*}
+  case "${repository##*/}" in
+    *:*) repository=${repository%:*} ;;
+  esac
+  case "$image" in
+    *@*) pinned=$image ;;
+    *)
+      pinned=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$pull_image" |
+        sed -n "s|^$repository@||p" | head -n 1)
+      [ -n "$pinned" ] ||
+        die "本机的镜像 $pull_image 没有仓库 $repository 的 digest，回滚时会认不出这一版。先 docker pull $pull_image，再执行一次"
+      pinned="$repository@$pinned"
+      ;;
+  esac
 fi
 
-# 系统服务都由核心镜像里的 compose 操作，和一键升级同一个（ADR-0025）：宿主不用装 compose 插件，读不到宿主的
+# 系统服务都由核心镜像里的 compose 操作，和一键升级同一个：宿主不用装 compose 插件，读不到宿主的
 # ~/.docker/config.json，两条路建出的容器一样。容器里没有调用者的 WONTON_*，.env 不会被盖住。
 compose() {
   docker run --rm --network none -v /var/run/docker.sock:/var/run/docker.sock -v "$install_dir:$install_dir" \
@@ -218,7 +250,7 @@ setup_plugin_slice() {
   plugin_slice=wonton_plugins.slice
 }
 
-# 下面几个函数处理出网代理（ADR-0023 的“代理地址从哪里来”）。
+# 下面几个函数处理出网代理。
 
 # 打印时不带用户名和密码。
 masked_proxy() {
@@ -236,7 +268,7 @@ proxy_for_containers() {
 }
 
 # .env 不加引号，这些字符会被 docker compose 或 sh 另作解释。
-proxy_fits_env() {
+fits_env() {
   case "$1" in
     *[[:space:]\$\'\"\`\\\#]*) return 1 ;;
   esac
@@ -244,10 +276,10 @@ proxy_fits_env() {
 
 # 测试容器接在核心以后用的网络上：防火墙常按网段放行，别的网桥上测通不算数。这个网络核心沿用，标签要和核心建的一样。
 ensure_egress_network() {
-  docker network inspect wonton-egress >/dev/null 2>&1 ||
-    docker network create --driver bridge --label wonton.managed-by=core \
-      --label wonton.core.component=wonton-egress wonton-egress >/dev/null ||
-    die "建不了 Docker 网络 wonton-egress"
+  docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock \
+    --cap-drop ALL --security-opt no-new-privileges --read-only \
+    -e WONTON_PLUGIN_NETWORK_POOL="$plugin_network_pool" \
+    "$pinned" prepare-egress-network || die "建不了出口网络：按上面的错误处理后重试"
 }
 
 # 打印一行 JSON（测通时是 null），退出码 0 是代理能用。地址经环境变量传入容器，不出现在 docker 的命令行上。
@@ -293,7 +325,7 @@ detect_proxy() {
     case " $tried " in *" $proxy "*) continue ;; esac
     tried="$tried $proxy"
     shown=$(masked_proxy "$proxy")
-    if ! proxy_fits_env "$proxy"; then
+    if ! fits_env "$proxy"; then
       echo "提示：没用代理 $shown：地址里的特殊字符要写成百分号编码" >&2
     elif result=$(check_proxy "$proxy"); then
       message=$(check_message "$result")
@@ -319,7 +351,7 @@ settle_proxy() {
   if [ -n "$egress_proxy" ]; then
     egress_proxy=$(proxy_for_containers "$egress_proxy")
     shown=$(masked_proxy "$egress_proxy")
-    proxy_fits_env "$egress_proxy" || die "WONTON_EGRESS_PROXY 里的特殊字符要写成百分号编码：$shown"
+    fits_env "$egress_proxy" || die "WONTON_EGRESS_PROXY 里的特殊字符要写成百分号编码：$shown"
     ensure_egress_network
     info "测试代理 $shown"
     result=$(check_proxy "$egress_proxy") ||
@@ -371,8 +403,14 @@ manual_rollback() {
 write_config() {
   info "生成密钥和配置（已有的沿用）"
   # 带上主人的设置：核心启动时也查，但那时容器会一直重启，要等满 10 分钟才报错，这里当场说清楚。
+  [ -z "$relays" ] || fits_env "$relays" ||
+    die "WONTON_RELAYS 里不能有空格和引号这些字符，令牌里的特殊字符写成百分号编码"
   docker run --rm -v "$install_dir:$install_dir" -v "$data_dir:$data_dir:ro" \
     -e WONTON_DATA_DIR="$data_dir" -e WONTON_OWNER_NAME="$owner_name" -e TZ="$tz" \
+    -e WONTON_MATRIX_SERVER_NAME="${WONTON_MATRIX_SERVER_NAME:-}" \
+    -e WONTON_PLUGIN_NETWORK_POOL="$plugin_network_pool" \
+    -e WONTON_FEDERATION_CORE_ADDR="$federation_core_addr" \
+    -e WONTON_RELAYS="$relays" \
     "$pinned" init "$install_dir" "$domain" || die "设置不对：按上面的错误改了再执行一次"
 
   settle_proxy
@@ -391,8 +429,12 @@ WONTON_PORT=$port
 WONTON_TUNNEL_PORT=$tunnel_port
 WONTON_BASE_DOMAIN=$domain
 WONTON_OWNER_NAME=$owner_name
+WONTON_PLUGIN_NETWORK_POOL=$plugin_network_pool
+WONTON_FEDERATION_SUBNET=$federation_subnet
+WONTON_FEDERATION_CORE_ADDR=$federation_core_addr
 TZ=$tz
 WONTON_LAN_ADDRESSES=$lan_addresses
+WONTON_RELAYS=$relays
 WONTON_EGRESS_PROXY=$egress_proxy
 EOF
   if [ -n "$plugin_slice" ]; then
