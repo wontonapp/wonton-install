@@ -23,6 +23,6 @@
 - 升级：再执行一次安装命令，或者在 App 里一键升级。
 - 退回旧版本：`curl -fsSL <安装脚本地址> | sudo WONTON_CORE_PIN=sha256:… sh`。
 
-核心的镜像是 `ghcr.io/geraldpeng6/wonton-core`，1.0 之前装的是 `beta` 渠道；App 只在内测里分发。核心、Tuwunel 等
+核心的镜像是 `ghcr.io/geraldpeng6/wonton-core`，装的是 `stable` 渠道；App 只在内测里分发。核心、Tuwunel 等
 镜像在 GHCR，Hydra、Hermes 的在 Docker Hub；国内的主机常常拉不到。连不上镜像仓库时脚本打印给 Docker daemon 配代理的
 做法，配好后再执行一次安装命令。可调的环境变量（端口、用户名、时区、出网代理等）见 `install.sh` 开头。

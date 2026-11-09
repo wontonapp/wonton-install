@@ -3,7 +3,7 @@
 #
 # 再执行一次就是升级或修复：拉核心镜像的最新版本，密钥和数据都沿用，compose 文件按新的核心镜像重写。可调的环境变量：
 #
-#   WONTON_CORE_IMAGE   要装的核心镜像（默认 ghcr.io/geraldpeng6/wonton-core:beta），可以写别的 tag 或 digest。
+#   WONTON_CORE_IMAGE   要装的核心镜像（默认 ghcr.io/geraldpeng6/wonton-core:stable），可以写别的 tag 或 digest。
 #                       tag 会按拉下来的镜像解析成仓库 digest 记进 .env，渠道照旧由这个 tag 决定
 #   WONTON_INSTALL_DIR  compose 文件、.env 和密钥（默认 /opt/wonton）
 #   WONTON_DATA_DIR     核心和插件的数据（默认 /var/lib/wonton）
@@ -16,15 +16,16 @@
 #                       最长 32 个字符，装好后不能改（默认 owner）
 #   TZ                  时区，IANA 时区名，如 Asia/Shanghai（默认宿主的时区，读不到时是 UTC）
 #   WONTON_LAN_ADDRESSES  插件的局域网端口只开在这些私有地址上，逗号分隔（默认不设：核心自动选，主人在 App 里改）。设成空就取消
+#   WONTON_ANNOUNCE_ADDRESSES  告诉手机去连的私有地址，逗号分隔，每项可以带前缀（192.168.1.20/24）；端口改绑 0.0.0.0。
+#                       桌面虚拟机（Docker Desktop、OrbStack、WSL2、Lima）里的启动器用它。默认不设，设成空就取消
 #   WONTON_RELAYS      中继表：档位用 ; 分开、前面的档优先，同档用 , 分开；令牌写在地址的
 #                       userinfo（https://TOKEN@host），n0 代表 iroh 内置的 n0 公共中继。默认不设：用 n0。
 #                       设成空就取消，回到 n0
 #   WONTON_EGRESS_PROXY  出网插件和核心经这个代理访问外网，http://、https:// 或 socks5://，可以带用户名和密码，特殊字符写成
 #                       百分号编码。测不通时安装失败。默认不设：第一次安装时检测一次，主人在 App 里改。设成空就取消
 #   WONTON_PLUGIN_NETWORK_POOL  插件网络使用的私有 IPv4 地址段（默认 10.213.0.0/16），核心从中分配 /26
-#   WONTON_FEDERATION_SUBNET  联邦网络的子网（默认 10.212.0.0/24）。同机装多套时各给一段；装好后换了值
-#                       compose 会要求重建网络
-#   WONTON_FEDERATION_CORE_ADDR  核心在联邦网络上的固定地址（默认 10.212.0.10），必须在子网里；装好后不能改
+#   WONTON_INSTALL_TIMEOUT_SECS  装插件时等容器就绪的下限秒数（默认 300）。插件按 healthcheck 的 start_period
+#                       自己放宽等待，一般不用设
 #   WONTON_PULL=never   不拉核心镜像，用本机已有的（测试用）
 #   WONTON_CORE_PIN     手动退回到这个 digest（sha256:…），之后照样跟渠道。有当时升级留下的备份就恢复核心
 #                       数据和安装目录
@@ -118,8 +119,7 @@ elif [ -n "${WONTON_RESTORE_VOLUMES:-}" ]; then
 fi
 
 image=${WONTON_CORE_IMAGE:-$(saved WONTON_CORE_SOURCE)}
-# 1.0 之前默认装 beta 渠道：内测期只发预发布版本，stable 渠道在 1.0 才有第一个版本。
-image=${image:-ghcr.io/geraldpeng6/wonton-core:beta}
+image=${image:-ghcr.io/geraldpeng6/wonton-core:stable}
 data_dir=${WONTON_DATA_DIR:-$(saved WONTON_DATA_DIR)}
 data_dir=${data_dir:-/var/lib/wonton}
 port=${WONTON_PORT:-$(saved WONTON_PORT)}
@@ -130,19 +130,17 @@ domain=${WONTON_BASE_DOMAIN:-$(saved WONTON_BASE_DOMAIN)}
 domain=${domain:-wonton.localhost}
 plugin_network_pool=${WONTON_PLUGIN_NETWORK_POOL:-$(saved WONTON_PLUGIN_NETWORK_POOL)}
 plugin_network_pool=${plugin_network_pool:-10.213.0.0/16}
-# 联邦网络：同机装多套时各给一段，地址必须落在子网里，compose 会当场拒绝不一致的组合。
-federation_subnet=${WONTON_FEDERATION_SUBNET:-$(saved WONTON_FEDERATION_SUBNET)}
-federation_subnet=${federation_subnet:-10.212.0.0/24}
-federation_core_addr=${WONTON_FEDERATION_CORE_ADDR:-$(saved WONTON_FEDERATION_CORE_ADDR)}
-federation_core_addr=${federation_core_addr:-10.212.0.10}
 # 没给也没记下时留空：核心用数据目录里记下的，第一次启动时是 owner。
 owner_name=${WONTON_OWNER_NAME:-$(saved WONTON_OWNER_NAME)}
 # 不用 `:-`：环境变量设成空就是取消上次的设置。
 lan_addresses=${WONTON_LAN_ADDRESSES-$(saved WONTON_LAN_ADDRESSES)}
+announce_addresses=${WONTON_ANNOUNCE_ADDRESSES-$(saved WONTON_ANNOUNCE_ADDRESSES)}
 # 不用 `:-`：环境变量设成空就是取消上次的设置，回到 n0。
 relays=${WONTON_RELAYS-$(saved WONTON_RELAYS)}
 egress_proxy=${WONTON_EGRESS_PROXY-$(saved WONTON_EGRESS_PROXY)}
 egress_detected=$(saved WONTON_EGRESS_PROXY_DETECTED)
+# 不用 `:-`：环境变量设成空就是取消上次的设置，回到核心的默认值。
+install_timeout=${WONTON_INSTALL_TIMEOUT_SECS-$(saved WONTON_INSTALL_TIMEOUT_SECS)}
 tz=${TZ:-$(saved TZ)}
 # `curl | sudo sh` 的环境里通常没有 TZ。都读不到时留空，由 compose 给 UTC。
 if [ -z "$tz" ]; then
@@ -409,7 +407,6 @@ write_config() {
     -e WONTON_DATA_DIR="$data_dir" -e WONTON_OWNER_NAME="$owner_name" -e TZ="$tz" \
     -e WONTON_MATRIX_SERVER_NAME="${WONTON_MATRIX_SERVER_NAME:-}" \
     -e WONTON_PLUGIN_NETWORK_POOL="$plugin_network_pool" \
-    -e WONTON_FEDERATION_CORE_ADDR="$federation_core_addr" \
     -e WONTON_RELAYS="$relays" \
     "$pinned" init "$install_dir" "$domain" || die "设置不对：按上面的错误改了再执行一次"
 
@@ -430,13 +427,16 @@ WONTON_TUNNEL_PORT=$tunnel_port
 WONTON_BASE_DOMAIN=$domain
 WONTON_OWNER_NAME=$owner_name
 WONTON_PLUGIN_NETWORK_POOL=$plugin_network_pool
-WONTON_FEDERATION_SUBNET=$federation_subnet
-WONTON_FEDERATION_CORE_ADDR=$federation_core_addr
 TZ=$tz
 WONTON_LAN_ADDRESSES=$lan_addresses
+WONTON_ANNOUNCE_ADDRESSES=$announce_addresses
 WONTON_RELAYS=$relays
 WONTON_EGRESS_PROXY=$egress_proxy
 EOF
+  # 设了才写：没设时核心用自己的默认值，.env 里不记常用默认。
+  if [ -n "$install_timeout" ]; then
+    echo "WONTON_INSTALL_TIMEOUT_SECS=$install_timeout" >>"$env_file.tmp"
+  fi
   if [ -n "$plugin_slice" ]; then
     echo "WONTON_PLUGIN_SLICE=$plugin_slice" >>"$env_file.tmp"
   fi
@@ -495,15 +495,19 @@ rm -f "$up_log" "$up_rc_file"
 state_file="$data_dir/core/upgrade/state.json"
 [ ! -f "$state_file" ] || mv "$state_file" "$state_file.$(date +%Y%m%d%H%M%S)"
 
-# 浏览器和手机在局域网里用来找到这台主机的地址：默认路由出去的那张网卡。
+# 浏览器里打开哪个地址：启动器声明了宣告地址时用它里面的第一个 IPv4（虚拟机自己的网卡地址在电脑上连不到），
+# 否则用默认路由出去的那张网卡。
 lan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
 [ -n "$lan_ip" ] || lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+announced_ip=$(printf '%s\n' "$announce_addresses" | tr ',' '\n' \
+  | sed -n 's#^\([0-9]\{1,3\}\(\.[0-9]\{1,3\}\)\{3\}\)\(/[0-9]*\)\?$#\1#p' | head -n 1)
+[ -n "$announced_ip" ] || announced_ip=$lan_ip
 
 mkdir -p /usr/local/bin
 ln -sf "$install_dir/wonton" /usr/local/bin/wonton
 
 echo
-info "装好了。浏览器打开 http://${lan_ip:-<这台主机的 IP>}:$port/ 看运行状态。"
+info "装好了。浏览器打开 http://${announced_ip:-<这台主机的 IP>}:$port/ 看运行状态。"
 # shellcheck disable=SC1111 # 中文的引号是要显示的文字
 cat <<EOF
 防火墙要放行 TCP $port（局域网网页）和 UDP $tunnel_port（手机连回家）。
