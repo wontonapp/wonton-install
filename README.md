@@ -21,8 +21,12 @@
 - 以后加设备：在已配对的 App 里点“添加设备”。
 - 设备都丢了：`sudo wonton pair`。
 - 升级：再执行一次安装命令，或者在 App 里一键升级。
-- 退回旧版本：`curl -fsSL <安装脚本地址> | sudo WONTON_CORE_PIN=sha256:… sh`。
+- 退回旧版本：`curl -fsSL https://raw.githubusercontent.com/wontonapp/wonton-install/main/install.sh | sudo WONTON_CORE_PIN=sha256:… sh`。
 
 核心的镜像是 `ghcr.io/wontonapp/wonton-core`，装的是 `stable` 渠道；App 只在内测里分发。核心、Tuwunel 等
 镜像在 GHCR，Hydra、Hermes 的在 Docker Hub；国内的主机常常拉不到。连不上镜像仓库时脚本打印给 Docker daemon 配代理的
-做法，配好后再执行一次安装命令。可调的环境变量（端口、用户名、时区、出网代理等）见 `install.sh` 开头。
+做法，配好后再执行一次安装命令。
+
+不想要域名（只和同类云吞互通）就带 `WONTON_MATRIX_NAME_MODE=none`，用自己的域名带 `WONTON_MATRIX_SERVER_NAME=域名`。
+“不要名字”的安装证书用 Let's Encrypt，换别的 CA 才带 `WONTON_ACME_DIRECTORY=<目录地址>`；用自己的域名时这个地址必填。订户协议平时在装好后的 App 里勾选，带不带 `WONTON_ACME_ACCEPT_TERMS=true` 对“不要名字”的安装没影响；用自己的域名时它必填，跳过会当场停下。
+可调的环境变量（端口、用户名、时区、出网代理等）见 `install.sh` 开头。
