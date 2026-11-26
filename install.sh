@@ -1,5 +1,6 @@
 #!/bin/sh
-# 云吞的一行安装：在装好 Docker 的 Linux 主机上用 root 执行，例如 `curl -fsSL <地址>/install.sh | sudo sh`。
+# 云吞的一行安装：在装好 Docker 的 Linux 主机上用 root 执行，例如
+# `curl -fsSL https://raw.githubusercontent.com/wontonapp/wonton-install/main/install.sh | sudo sh`。
 #
 # 再执行一次就是升级或修复：拉核心镜像的最新版本，密钥和数据都沿用，compose 文件按新的核心镜像重写。可调的环境变量：
 #
@@ -7,6 +8,7 @@
 #                       tag 会按拉下来的镜像解析成仓库 digest 记进 .env，渠道照旧由这个 tag 决定
 #   WONTON_INSTALL_DIR  compose 文件、.env 和密钥（默认 /opt/wonton）
 #   WONTON_DATA_DIR     核心和插件的数据（默认 /var/lib/wonton）
+#   WONTON_RELAY_DIR    宿主网络中继的 unix 套接字（默认 /run/wonton/relay）：`sun_path` 只有 108 字节，要在短路径上
 #   WONTON_PORT         局域网网页和网关的 TCP 端口（默认 8480）
 #   WONTON_TUNNEL_PORT  隧道的 UDP 端口（默认 8482）
 #   WONTON_BASE_DOMAIN  基础域名：App 经隧道访问核心和插件网页用的主机名，装好后不能改（默认 wonton.localhost）
@@ -14,26 +16,27 @@
 #   WONTON_MATRIX_NAME_MODE=none  高级：不要名字，只与同类已配对云吞通信；以后互通必须重装聊天数据。
 #   WONTON_CLIENT_SERVICE、WONTON_CLIENT_INVITE_FILE  送的名字的服务地址和邀请码文件。
 #   送名字缺这些配置时安装会停，并给出“不要名字”“用自己的域名”两条带安装命令的路。
-#   WONTON_ACME_DIRECTORY、WONTON_ACME_ACCEPT_TERMS  证书服务地址及是否明确接受其条款。
+#   WONTON_ACME_DIRECTORY、WONTON_ACME_ACCEPT_TERMS  证书服务地址及是否明确接受其条款。不要名字的安装地址默认
+#                       Let's Encrypt 正式地址、条款到 App 里勾（勾之前核心不联系 CA）；送名字和用自己的域名时都要给。
 #   WONTON_*_CA_FILE、WONTON_ACME_RESOLVERS  测试 CA 与开发 DNS，证书验证不会关闭。
 #   WONTON_OWNER_NAME   用户名，同时是 Matrix 用户名和插件里的账号，只能用小写字母、数字、_ 和 -，以字母开头，
 #                       最长 32 个字符，装好后不能改（默认 owner）
 #   TZ                  时区，IANA 时区名，如 Asia/Shanghai（默认宿主的时区，读不到时是 UTC）
-#   WONTON_LAN_ADDRESSES  插件的局域网端口只开在这些私有地址上，逗号分隔（默认不设：核心自动选，主人在 App 里改；
-#                       ADR-0019）。设成空就取消
-#   WONTON_ANNOUNCE_ADDRESSES  告诉手机去连的私有地址，逗号分隔，每项可以带前缀（192.168.1.20/24）；端口改绑 0.0.0.0。
+#   WONTON_LAN_ADDRESSES  插件的局域网端口只开在这些私有地址上，逗号分隔（默认不设：核心自动选，主人在 App 里改）。设成空就取消
+#   WONTON_ANNOUNCE_ADDRESSES  告诉手机去连的私有地址，逗号分隔，每项可以带前缀（192.0.2.20/24）；端口改绑 0.0.0.0。
 #                       桌面虚拟机（Docker Desktop、OrbStack、WSL2、Lima）里的启动器用它。默认不设，设成空就取消
-#   WONTON_RELAYS      中继表（ADR-0048）：档位用 ; 分开、前面的档优先，同档用 , 分开；令牌写在地址的
-#                       userinfo（https://TOKEN@host），n0 代表 iroh 内置的 n0 公共中继。默认不设：用 n0。
-#                       设成空就取消，回到 n0
+#   WONTON_RELAYS      中继表：档位用 ; 分开、前面的档优先，同档用 , 分开；令牌写在地址的
+#                       userinfo（https://TOKEN@host#QUIC端口），n0 代表 iroh 内置的 n0 公共中继，
+#                       no-n0 去掉 n0 兜底。默认不设：只用 n0，主人能在设置页加中继（写数据目录的
+#                       core/relays.json，权限 0600）。设了这项设置页只读，适合部署时固定。设成空就取消
 #   WONTON_DOH_URL       配了出网代理时，链接预览经代理解析域名用的 DoH 服务器，默认 https://1.1.1.1/dns-query
 #   WONTON_EGRESS_PROXY  出网插件和核心经这个代理访问外网，http://、https:// 或 socks5://，可以带用户名和密码，特殊字符写成
-#                       百分号编码。测不通时安装失败。默认不设：第一次安装时检测一次，主人在 App 里改（ADR-0023）。设成空就取消
+#                       百分号编码。测不通时安装失败。默认不设：第一次安装时检测一次，主人在 App 里改。设成空就取消
 #   WONTON_PLUGIN_NETWORK_POOL  插件网络使用的私有 IPv4 地址段（默认 10.213.0.0/16），核心从中分配 /26
 #   WONTON_INSTALL_TIMEOUT_SECS  装插件时等容器就绪的下限秒数（默认 300）。插件按 healthcheck 的 start_period
 #                       自己放宽等待，一般不用设
 #   WONTON_PULL=never   不拉核心镜像，用本机已有的（测试用）
-#   WONTON_CORE_PIN     手动退回到这个 digest（sha256:…），之后照样跟渠道（ADR-0025）。有当时升级留下的备份就恢复核心
+#   WONTON_CORE_PIN     手动退回到这个 digest（sha256:…），之后照样跟渠道。有当时升级留下的备份就恢复核心
 #                       数据和安装目录
 #   WONTON_RESTORE_VOLUMES=1  退回不可逆的版本时，同时恢复备份里的卷
 #
@@ -143,6 +146,8 @@ image=${WONTON_CORE_IMAGE:-$(saved WONTON_CORE_SOURCE)}
 image=${image:-ghcr.io/wontonapp/wonton-core:stable}
 data_dir=${WONTON_DATA_DIR:-$(saved WONTON_DATA_DIR)}
 data_dir=${data_dir:-/var/lib/wonton}
+relay_dir=${WONTON_RELAY_DIR:-$(saved WONTON_RELAY_DIR)}
+relay_dir=${relay_dir:-/run/wonton/relay}
 port=${WONTON_PORT:-$(saved WONTON_PORT)}
 port=${port:-8480}
 tunnel_port=${WONTON_TUNNEL_PORT:-$(saved WONTON_TUNNEL_PORT)}
@@ -156,8 +161,15 @@ owner_name=${WONTON_OWNER_NAME:-$(saved WONTON_OWNER_NAME)}
 # 不用 `:-`：环境变量设成空就是取消上次的设置。
 lan_addresses=${WONTON_LAN_ADDRESSES-$(saved WONTON_LAN_ADDRESSES)}
 announce_addresses=${WONTON_ANNOUNCE_ADDRESSES-$(saved WONTON_ANNOUNCE_ADDRESSES)}
-# 不用 `:-`：环境变量设成空就是取消上次的设置，回到 n0。
+# 不用 `:-`：环境变量设成空就是取消上次的设置，回到数据目录的 relays.json（没有就只用 n0）。
 relays=${WONTON_RELAYS-$(saved WONTON_RELAYS)}
+# 运行时覆盖内置表（构建参数只是兜底）；空串表示取消之前记下的值。
+builtin_relays=${WONTON_BUILTIN_RELAYS-$(saved WONTON_BUILTIN_RELAYS)}
+push_vapid_key=${WONTON_PUSH_VAPID_KEY-$(saved WONTON_PUSH_VAPID_KEY)}
+push_vapid_subject=${WONTON_PUSH_VAPID_SUBJECT-$(saved WONTON_PUSH_VAPID_SUBJECT)}
+relay_list_url=${WONTON_RELAY_LIST_URL-$(saved WONTON_RELAY_LIST_URL)}
+relay_list_pubkey=${WONTON_RELAY_LIST_PUBKEY-$(saved WONTON_RELAY_LIST_PUBKEY)}
+relays_file=${WONTON_RELAYS_FILE-$(saved WONTON_RELAYS_FILE)}
 egress_proxy=${WONTON_EGRESS_PROXY-$(saved WONTON_EGRESS_PROXY)}
 doh_url=${WONTON_DOH_URL-$(saved WONTON_DOH_URL)}
 egress_detected=$(saved WONTON_EGRESS_PROXY_DETECTED)
@@ -175,8 +187,12 @@ case "$data_dir" in
   /*) ;;
   *) die "WONTON_DATA_DIR 要是绝对路径：$data_dir" ;;
 esac
+case "$relay_dir" in
+  /*) ;;
+  *) die "WONTON_RELAY_DIR 要是绝对路径：$relay_dir" ;;
+esac
 
-mkdir -p "$install_dir" "$data_dir"
+mkdir -p "$install_dir" "$data_dir" "$relay_dir"
 chmod 700 "$install_dir"
 
 if [ -n "$pin" ]; then
@@ -239,7 +255,7 @@ else
   }
   rm -f "$pull_err"
 fi
-# 能写成 digest 就写 digest：升级、回滚都按它（ADR-0012）。给了 digest 的照写；给了标签的从拉下来的镜像的
+# 能写成 digest 就写 digest：升级、回滚都按它。给了 digest 的照写；给了标签的从拉下来的镜像的
 # RepoDigests 里取同一个仓库的那条，读不到就停下，不退回写标签：标签跟着渠道移走，回滚起到的就不是这一版。
 if [ -n "$pin" ]; then
   pinned=$pull_image
@@ -260,7 +276,7 @@ else
   esac
 fi
 
-# 系统服务都由核心镜像里的 compose 操作，和一键升级同一个（ADR-0025）：宿主不用装 compose 插件，读不到宿主的
+# 系统服务都由核心镜像里的 compose 操作，和一键升级同一个：宿主不用装 compose 插件，读不到宿主的
 # ~/.docker/config.json，两条路建出的容器一样。容器里没有调用者的 WONTON_*，.env 不会被盖住。
 compose() {
   docker run --rm --network none -v /var/run/docker.sock:/var/run/docker.sock -v "$install_dir:$install_dir" \
@@ -297,7 +313,7 @@ setup_plugin_slice() {
   plugin_slice=wonton_plugins.slice
 }
 
-# 下面几个函数处理出网代理（ADR-0023 的“代理地址从哪里来”）。
+# 下面几个函数处理出网代理。
 
 # 打印时不带用户名和密码。
 masked_proxy() {
@@ -317,7 +333,7 @@ proxy_for_containers() {
 # .env 不加引号，这些字符会被 docker compose 或 sh 另作解释。
 fits_env() {
   case "$1" in
-    *[[:space:]\$\'\"\`\\\#]*) return 1 ;;
+    *[[:space:]\$\'\"\`\\]*) return 1 ;;
   esac
 }
 
@@ -450,21 +466,39 @@ manual_rollback() {
     die "退回失败，看上面的错误。备份还在数据目录的 core/upgrade/backup 里"
 }
 
+# 不用名字的安装没有 entry/settings.json，运行时的 ACME 目录只能从环境读（核心 clients/domain.rs 的 acme()）：
+# 没给就用 Let's Encrypt 正式地址，重跑沿用上次记下的。订户协议在那里不读环境，由主人在 App 勾选，勾之前核心不联系 CA。
+default_acme_directory='https://acme-v02.api.letsencrypt.org/directory'
+
+acme_directory() {
+  printenv WONTON_ACME_DIRECTORY 2>/dev/null ||
+    sed -n 's/^WONTON_ACME_DIRECTORY=//p' "$temporary" | tail -n 1
+}
+
 # 文件凭据只复制到私有安装目录，不把凭据值放到命令行。
+# 重跑（升级、修复）时没再给的变量沿用上次的记录和副本：保存的入口配置继续引用这些文件，状态查询和续期要读。
+# 空值也当作没给：这些输入装好后已固定在 entry/settings.json，重跑不能靠清空取消。
 prepare_entry_env() {
 mkdir -p "$install_dir/entry-input"
 chmod 700 "$install_dir/entry-input"
 umask 077
 output="$install_dir/entry-input/init.env"
-: >"$output"
+temporary="$output.tmp"
+: >"$temporary"
+chmod 600 "$temporary"
+[ ! -f "$output" ] || cat "$output" >"$temporary"
+if [ "${WONTON_MATRIX_NAME_MODE:-given}" = none ]; then
+  directory=$(acme_directory)
+  record_entry_env WONTON_ACME_DIRECTORY "${directory:-$default_acme_directory}"
+fi
 for key in WONTON_MATRIX_SERVER_NAME WONTON_MATRIX_NAME_MODE WONTON_CLIENT_SERVICE \
   WONTON_ACME_DIRECTORY WONTON_ACME_RESOLVERS WONTON_ACME_EMAIL WONTON_ACME_ACCEPT_TERMS \
-  WONTON_ACME_NETWORK WONTON_ACME_DNS_PROVIDER WONTON_ENTRY_CERTIFICATE; do
+  WONTON_ACME_NETWORK WONTON_ACME_PROPAGATION_DISABLE_ANS WONTON_ACME_DNS_PROVIDER WONTON_ENTRY_CERTIFICATE; do
   value=$(printenv "$key" || true)
   [ -n "$value" ] || continue
   case "$value" in *'
 '*) echo "$key 不能包含换行" >&2; exit 1 ;; esac
-  printf '%s=%s\n' "$key" "$value" >>"$output"
+  record_entry_env "$key" "$value"
 done
 for key in WONTON_CLIENT_INVITE_FILE WONTON_CLIENT_CA_FILE WONTON_FRP_CA_FILE \
   WONTON_ACME_CA_FILE WONTON_ACME_DNS_ENV_FILE; do
@@ -474,13 +508,25 @@ for key in WONTON_CLIENT_INVITE_FILE WONTON_CLIENT_CA_FILE WONTON_FRP_CA_FILE \
   target="$install_dir/entry-input/$key"
   if [ "$source" != "$target" ]; then cp "$source" "$target"; fi
   chmod 600 "$target"
-  printf '%s=%s\n' "$key" "$target" >>"$output"
+  record_entry_env "$key" "$target"
 done
+mv "$temporary" "$output"
+sync
+}
+
+# 只换这一行，别的键原样留下；值里可能有斜杠和等号，不引用整份文件重写。
+record_entry_env() {
+  grep -v "^$1=" "$temporary" >"$temporary.next" || true
+  printf '%s=%s\n' "$1" "$2" >>"$temporary.next"
+  mv "$temporary.next" "$temporary"
 }
 
 # 送名字要的家名服务、邀请码和证书输入缺了：给两条能直接抄的路，不写死内部地址。
 entry_missing() {
-  [ "${WONTON_MATRIX_NAME_MODE:-given}" = none ] && return 1
+  # 不要名字的安装没有 settings.json：ACME 目录有默认值、条款到 App 里勾，装机不缺东西。
+  if [ "${WONTON_MATRIX_NAME_MODE:-given}" = none ]; then
+    return 1
+  fi
   [ -n "${WONTON_MATRIX_SERVER_NAME:-}" ] && return 1
   for key in WONTON_CLIENT_SERVICE WONTON_CLIENT_INVITE_FILE WONTON_ACME_DIRECTORY \
     WONTON_ACME_ACCEPT_TERMS WONTON_FRP_CA_FILE; do
@@ -490,13 +536,21 @@ entry_missing() {
 }
 
 init_failed() {
-  if entry_missing; then
+  if [ "${WONTON_MATRIX_NAME_MODE:-given}" = none ]; then
+    cat >&2 <<'EOF'
+“不要名字”的安装证书用 Let's Encrypt 正式地址，要用别的 CA 就在原来的命令上带：
+  WONTON_ACME_DIRECTORY=https://<ACME 目录>
+（测试或内部 CA 还可以给 WONTON_ACME_CA_FILE、WONTON_ACME_RESOLVERS、WONTON_ACME_EMAIL。）
+按上面的错误改了再执行一次。
+EOF
+    exit 1
+  elif entry_missing; then
     cat >&2 <<'EOF'
 还没有服务器名，送名字要的配置（家名服务、邀请码、证书）也不全。两条路选一条，在原来的安装命令上带一个变量：
   1) 不要名字（以后不能改；要和外面的 Matrix 互通得清空聊天数据重装）：
-     curl -fsSL <安装地址>/install.sh | sudo WONTON_MATRIX_NAME_MODE=none sh
+     curl -fsSL https://raw.githubusercontent.com/wontonapp/wonton-install/main/install.sh | sudo WONTON_MATRIX_NAME_MODE=none sh
   2) 用自己的域名（证书怎么做见安装说明的“服务器名和证书”一节）：
-     curl -fsSL <安装地址>/install.sh | sudo WONTON_MATRIX_SERVER_NAME=chat.example.com sh
+     curl -fsSL https://raw.githubusercontent.com/wontonapp/wonton-install/main/install.sh | sudo WONTON_MATRIX_SERVER_NAME=chat.example.com sh
 EOF
   else
     echo "设置不对：按上面的错误改了再执行一次" >&2
@@ -504,13 +558,41 @@ EOF
   exit 1
 }
 
+# 配置的解析器转成 init 容器的 --dns：每项是 IP:端口，容器只要 IP。默认 bridge 没有
+# Docker 内置 DNS，和 lego 一样不补 127.0.0.11。
+resolver_dns_args() {
+  for server in $(printf '%s' "${WONTON_ACME_RESOLVERS:-}" | tr ',' ' '); do
+    server=${server%:*}
+    server=${server#[}
+    server=${server%]}
+    printf '%s\n%s\n' --dns "$server"
+  done
+}
+
 write_config() {
   info "生成密钥和配置（已有的沿用）"
   # 带上主人的设置：核心启动时也查，但那时容器会一直重启，要等满 10 分钟才报错，这里当场说清楚。
   [ -z "$relays" ] || fits_env "$relays" ||
-    die "WONTON_RELAYS 里不能有空格和引号这些字符，令牌里的特殊字符写成百分号编码"
+    die "WONTON_RELAYS 里不能有空格和引号这些字符；令牌里的特殊字符写成百分号编码，QUIC 端口直接写 #端口（如 #7843）"
+  [ -z "$builtin_relays" ] || fits_env "$builtin_relays" ||
+    die "WONTON_BUILTIN_RELAYS 里不能有空格和引号这些字符；QUIC 端口直接写 #端口（如 #7843）"
+  [ -z "$push_vapid_key" ] || fits_env "$push_vapid_key" ||
+    die "WONTON_PUSH_VAPID_KEY 里不能有空格和引号这些字符"
+  [ -z "$push_vapid_subject" ] || fits_env "$push_vapid_subject" ||
+    die "WONTON_PUSH_VAPID_SUBJECT 里不能有空格和引号这些字符"
+  [ -z "$relay_list_url" ] || fits_env "$relay_list_url" ||
+    die "WONTON_RELAY_LIST_URL 里不能有空格和引号这些字符"
+  [ -z "$relay_list_pubkey" ] || fits_env "$relay_list_pubkey" ||
+    die "WONTON_RELAY_LIST_PUBKEY 里不能有空格和引号这些字符"
+  [ -z "$relays_file" ] || fits_env "$relays_file" ||
+    die "WONTON_RELAYS_FILE 里不能有空格和引号这些字符"
   prepare_entry_env
+  # “不要名字”的坐标核心运行时也要用，现在就查，别等装完才发现签不出。
+  if [ "${WONTON_MATRIX_NAME_MODE:-given}" = none ] && entry_missing; then init_failed; fi
+  # resolver_dns_args 输出成对的 --dns 和 IP，靠分词拆成参数。
+  # shellcheck disable=SC2046
   docker run --rm --network "${WONTON_ACME_NETWORK:-bridge}" \
+    $(resolver_dns_args) \
     --env-file "$install_dir/entry-input/init.env" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$install_dir:$install_dir" -v "$data_dir:$data_dir" \
@@ -524,6 +606,9 @@ write_config() {
   setup_plugin_slice
 
   umask 077
+  # 主人手写的连接器发布地址和端口要保住：这两行不在下面的固定键表里，重跑安装不能把它们删掉。
+  entry_bind="$(saved WONTON_ENTRY_BIND)"
+  entry_port="$(saved WONTON_ENTRY_PORT)"
   # 写临时文件、落盘、改名：一键升级也读这个文件，不能让它读到写了一半的。
   cat >"$env_file.tmp" <<EOF
 # 由 install.sh 写出。改端口、换镜像后再执行一次 install.sh；基础域名装好后不能改。
@@ -532,6 +617,7 @@ WONTON_CORE_SOURCE=$image
 WONTON_CORE_IMAGE=$pinned
 WONTON_INSTALL_DIR=$install_dir
 WONTON_DATA_DIR=$data_dir
+WONTON_RELAY_DIR=$relay_dir
 WONTON_PORT=$port
 WONTON_TUNNEL_PORT=$tunnel_port
 WONTON_BASE_DOMAIN=$domain
@@ -541,9 +627,18 @@ TZ=$tz
 WONTON_LAN_ADDRESSES=$lan_addresses
 WONTON_ANNOUNCE_ADDRESSES=$announce_addresses
 WONTON_RELAYS=$relays
+WONTON_BUILTIN_RELAYS=$builtin_relays
+WONTON_PUSH_VAPID_KEY=$push_vapid_key
+WONTON_PUSH_VAPID_SUBJECT=$push_vapid_subject
 WONTON_EGRESS_PROXY=$egress_proxy
 WONTON_DOH_URL=$doh_url
 EOF
+  [ -z "$entry_bind" ] || echo "WONTON_ENTRY_BIND=$entry_bind" >>"$env_file.tmp"
+  # 签名列表和主人配置文件的位置：设了才记，没设时核心用自己的默认值。
+  [ -z "$relay_list_url" ] || echo "WONTON_RELAY_LIST_URL=$relay_list_url" >>"$env_file.tmp"
+  [ -z "$relay_list_pubkey" ] || echo "WONTON_RELAY_LIST_PUBKEY=$relay_list_pubkey" >>"$env_file.tmp"
+  [ -z "$relays_file" ] || echo "WONTON_RELAYS_FILE=$relays_file" >>"$env_file.tmp"
+  [ -z "$entry_port" ] || echo "WONTON_ENTRY_PORT=$entry_port" >>"$env_file.tmp"
   # 设了才写：没设时核心用自己的默认值，.env 里不记常用默认。
   if [ -n "$install_timeout" ]; then
     echo "WONTON_INSTALL_TIMEOUT_SECS=$install_timeout" >>"$env_file.tmp"
@@ -555,6 +650,15 @@ EOF
   if [ -n "$record_detected" ]; then
     echo "WONTON_EGRESS_PROXY_DETECTED=$egress_detected" >>"$env_file.tmp"
   fi
+  # ACME 坐标要活到运行时：none 模式没有 settings.json，核心只认环境和设置。
+  # 值从 init.env 取：复制进来的 CA 在里面的路径已经改成私有安装目录下的那份。
+  for key in WONTON_ACME_DIRECTORY WONTON_ACME_RESOLVERS WONTON_ACME_EMAIL \
+    WONTON_ACME_ACCEPT_TERMS WONTON_ACME_NETWORK WONTON_ACME_CA_FILE \
+    WONTON_ACME_PROPAGATION_DISABLE_ANS; do
+    value=$(grep -m1 "^$key=" "$install_dir/entry-input/init.env" 2>/dev/null | cut -d= -f2- || true)
+    [ -n "$value" ] || continue
+    printf '%s=%s\n' "$key" "$value" >>"$env_file.tmp"
+  done
   sync
   mv "$env_file.tmp" "$env_file"
   sync
@@ -627,6 +731,10 @@ cat <<EOF
 以后加设备：在已配对的 App 里点“添加设备”；设备都丢了：sudo wonton pair
 
 EOF
-# 第一台设备配上前一直显示首次配对码（过期前换新的）；已经有设备时只说明怎么加设备。
-"$install_dir/wonton" pair --first ||
-  echo "提示：终端里出码失败，用局域网网页上的二维码配对" >&2
+# curl | sudo sh 的标准输入是管道，是否现场配对按输出终端判断；自动安装不把一次性码写进日志。
+if [ -t 1 ]; then
+  "$install_dir/wonton" pair --first ||
+    echo "提示：终端里出码失败，用局域网网页上的二维码配对" >&2
+else
+  echo "首次配对：打开上面的局域网状态页扫码，或在服务器终端执行 sudo wonton pair --first。"
+fi
